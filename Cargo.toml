@@ -1,0 +1,11 @@
+[package]
+name = "domain-finder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+futures = "0.3.31"
+prompted = "0.2.8"
+reqwest = { version="0.12.22", features=["json", "multipart"] }
+serde_json = "1.0.141"
+tokio = { version = "1", features = ["full"] }
