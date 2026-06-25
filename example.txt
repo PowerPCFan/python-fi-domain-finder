@@ -1,4 +1,0 @@
-spotify
-google
-youtube
-facebook
