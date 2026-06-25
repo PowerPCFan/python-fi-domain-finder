@@ -41,7 +41,7 @@ async fn main() {
             let client = Client::new();
             let tld = tld.clone();
             async move {
-                availabilitycheck::check_domain_available(&client, &format!("{}{}", word.replace("-",""), tld)).await;
+                availabilitycheck::check_domain_available(&client, &format!("{}{}", word.replace("-","").trim(), tld.trim())).await;
             }
         })
         .buffer_unordered(max_connections)
