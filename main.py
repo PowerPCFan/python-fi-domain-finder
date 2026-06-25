@@ -100,10 +100,10 @@ def main():
             if result is not None:
                 found_domains.append(result)
 
-    save_name = f"available_{time.time()}.txt"
+    save_name = f"available_{int(time.time())}.txt"
     write(sorted(found_domains), save_name)
 
-    print("Done! Saved to available.txt")
+    print(f"Done! Saved to {save_name}")
 
 if __name__ == "__main__":
     main()
