@@ -1,57 +1,61 @@
-import asyncio
 import time
-import httpx
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+import httpx
 
 
 ANSI = "\033["
 GREEN = ANSI + "32m"
 RESET = ANSI + "0m"
 
-
-retry_storage: dict[str, int] = {}
-available: dict[int, list[str]] = {}
+URL = "https://www.domainhotelli.fi/asiakkaat/modules/addons/ispapidomaincheck/domain_search_wrapper_cnic.php"
 
 
-def check_availability(session: httpx.Client, domain: str) -> bool:
+def check_availability(domain: str) -> bool:
     print(f"\nChecking domain '{domain}'...")
 
-    response = session.post(
-        "https://www.domainhotelli.fi/asiakkaat/modules/addons/ispapidomaincheck/domain_search_wrapper_cnic.php",
-        data={ "domain": domain, "domains[]": domain },
-    )
-
-    if response.status_code != 200:
-        if response.status_code == 429:
-            retry_storage[domain] = retry_storage.get(domain, 0) + 1
-            if retry_storage[domain] > 3:
-                print(f"Rate limited too many times for '{domain}'. Skipping.")
+    with httpx.Client(timeout=10) as client:
+        for attempt in range(1, 4):
+            try:
+                response = client.post(
+                    URL,
+                    data={"domain": domain, "domains[]": domain},
+                )
+            except httpx.HTTPError as error:
+                print(f"Request failed for '{domain}': {error}")
                 return False
 
-            retry_after = int(response.headers.get("Retry-After", 1))
-            print(f"Rate limited. Retrying after {retry_after} seconds...")
-            time.sleep(retry_after)
-            return check_availability(session, domain)
-        else:
-            print(f"Error: domainhotelli.fi returned {response.status_code}")
+            if response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", 1))
+                print(f"Rate limited for '{domain}'. Retrying after {retry_after} seconds...")
+                time.sleep(retry_after)
+                continue
+
+            if response.status_code != 200:
+                print(f"Error: domainhotelli.fi returned {response.status_code} for '{domain}'")
+                return False
+
+            if "available" in response.text:
+                print(f"{GREEN}'{domain}' is available!{RESET}")
+                return True
+
+            print(f"'{domain}' is not available.")
             return False
 
-    if "available" in response.text:
-        print(f"{GREEN}'{domain}' is available!{RESET}")
-        return True
-
-    print(f"'{domain}' is not available.")
+    print(f"Rate limited too many times for '{domain}'. Skipping.")
     return False
 
 
-def write(words: list[str], path: str) -> None:
-    with Path(path).open("w") as f:
-        f.write("\n".join(words))
+def write(domains: list[str], path: str) -> None:
+    Path(path).write_text("\n".join(domains))
 
 
-def search(words: list[str]) -> list[str]:
-    with httpx.Client(timeout=5) as client:
-        return [word for word in words if check_availability(client, word.replace('-', '').strip() + ".fi")]
+def check_word(word: str) -> str | None:
+    domain = word.replace("-", "").strip() + ".fi"
+    if check_availability(domain):
+        return domain
+    return None
 
 
 def main():
@@ -61,35 +65,42 @@ def main():
         print("File does not exist or is not a file.")
         return
 
-    word_length = int(input("Domain length (excluding TLD): "))
-    raw_words = [word for word in [line.strip() for line in word_list_path.read_text().splitlines()] if word]
-    words = [word for word in raw_words if len(word) == word_length]
-
-    if len(words) < 10:
-        print("Not enough words to check. Please provide at least 10 words of the specified length.")
+    try:
+        word_length = int(input("Domain length excluding TLD, or 0 for any: "))
+    except ValueError:
+        print("Invalid word length.")
         return
+
+    try:
+        max_workers = int(input("How many requests can be active at a time? Default 5: ") or "5")
+    except ValueError:
+        print("Invalid maximum connections.")
+        return
+
+    raw_words = [line.strip() for line in word_list_path.read_text().splitlines() if line.strip()]
+
+    if word_length == 0:
+        words = raw_words
+    else:
+        words = [word for word in raw_words if len(word) == word_length]
 
     print(f"Words that fit the word length: {len(words)} (out of {len(raw_words)} total words)")
     print("Checking for domains...")
 
-    word_chunks: dict[int, list[str]] = {}
-    for i, word in enumerate(words):
-        chunk_index = i % 10
-        if chunk_index not in word_chunks:
-            word_chunks[chunk_index] = []
-        word_chunks[chunk_index].append(word)
+    found_domains: list[str] = []
 
-    for i in range(10):
-        avail = asyncio.run(asyncio.to_thread(search, word_chunks[i]))
-        available[i] = avail
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(check_word, word)
+            for word in words
+        ]
 
-    combined = []
-    for domains in available.values():
-        for domain in domains:
-            combined.append(domain)
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                found_domains.append(result)
 
-    sorted_with_tld = [domain + ".fi" for domain in sorted(combined)]
-    write(sorted_with_tld, "available.txt")
+    write(sorted(found_domains), "available.txt")
 
     print("Done! Saved to available.txt")
 
